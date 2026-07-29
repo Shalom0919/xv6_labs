@@ -114,6 +114,27 @@ printf(char *fmt, ...)
     release(&pr.lock);
 }
 
+// Print the return addresses in the current kernel stack. Each kernel stack
+// occupies one page, so reaching the page boundary terminates the walk.
+void
+backtrace(void)
+{
+  uint64 fp = r_fp();
+  uint64 stack_bottom = PGROUNDDOWN(fp);
+  uint64 stack_top = PGROUNDUP(fp);
+
+  printf("backtrace:\n");
+  while(fp > stack_bottom && fp < stack_top){
+    uint64 return_address = *(uint64 *)(fp - 8);
+    uint64 caller_fp = *(uint64 *)(fp - 16);
+
+    printf("%p\n", return_address);
+    if(caller_fp <= fp || caller_fp >= stack_top)
+      break;
+    fp = caller_fp;
+  }
+}
+
 void
 panic(char *s)
 {
@@ -121,6 +142,7 @@ panic(char *s)
   printf("panic: ");
   printf(s);
   printf("\n");
+  backtrace();
   panicked = 1; // freeze uart output from other CPUs
   for(;;)
     ;

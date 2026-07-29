@@ -76,6 +76,20 @@ usertrap(void)
   if(p->killed)
     exit(-1);
 
+  // Count only user-mode timer interrupts outside a running handler. When the
+  // interval expires, preserve every user register and redirect epc to the
+  // registered handler. sigreturn restores this snapshot.
+  if(which_dev == 2 && p->alarm_interval > 0 && !p->alarm_active){
+    p->alarm_ticks++;
+    if(p->alarm_ticks >= p->alarm_interval){
+      memmove(&p->alarm_trapframe, p->trapframe,
+              sizeof(p->alarm_trapframe));
+      p->alarm_ticks = 0;
+      p->alarm_active = 1;
+      p->trapframe->epc = p->alarm_handler;
+    }
+  }
+
   // give up the CPU if this is a timer interrupt.
   if(which_dev == 2)
     yield();
@@ -217,4 +231,3 @@ devintr()
     return 0;
   }
 }
-

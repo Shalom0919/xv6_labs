@@ -1,0 +1,24 @@
+1. RISC-V passes the first eight integer or pointer arguments in a0 through
+   a7. In main's printf call, 13 is the third argument and is held in a2.
+
+2. There is no call to f in main and no call to g in f. With optimization
+   enabled, GCC inlines both computations; main loads the already-computed
+   value 12 into a1.
+
+3. In the generated user/call.asm, printf is located at address 0x64e.
+
+4. The jalr to printf is at 0x3c, so ra contains the following instruction
+   address, 0x40.
+
+5. The output is:
+     He110 World
+   57616 is 0xe110. On little-endian RISC-V, i=0x00646c72 is stored as the
+   byte sequence 72 6c 64 00, which is the null-terminated string "rld".
+
+6. On a big-endian machine, i should be 0x726c6400 so that memory still
+   contains 72 6c 64 00. The value 57616 need not change: endianness changes
+   the in-memory byte order, not the numeric value passed to %x.
+
+7. The value printed after y= is indeterminate. printf expects another
+   variadic integer argument, but the caller supplies only 3, so printf reads
+   whatever stale value happens to be in the next argument register (a2).
