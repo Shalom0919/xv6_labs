@@ -1,0 +1,28 @@
+1. Other system calls that could use the shared page
+
+uptime() could be accelerated by placing a read-only snapshot of the tick
+counter in the shared page and updating it from the timer-interrupt path.
+User code could then read the value without an ecall.  Because the value is
+updated concurrently, the kernel would need an atomic representation or a
+sequence counter so that user space cannot observe a torn update.  Other
+small, frequently read, non-secret process properties could use the same
+idea, but mutable values require a clear synchronization protocol.
+
+2. Explanation of the vmprint output
+
+The output is a depth-first traversal of the three-level Sv39 page table in
+Figure 3-4.  Each ".." shows one additional page-table level.  A valid PTE
+with none of PTE_R, PTE_W, or PTE_X points to a lower-level page table; a
+valid PTE with one of those bits set is a leaf mapping.  The physical address
+printed after each PTE is obtained with PTE2PA.
+
+For init after exec, virtual page 0 contains the program text and data.
+Virtual page 2 is the user stack.  Virtual page 1 is the stack guard page:
+its PTE_U bit has been cleared, so code running in user mode can neither read
+nor write it even though the kernel mapping still has ordinary page
+permissions.  An attempted user access therefore causes a page fault.
+
+At the high end of the address space, the third-to-last page is USYSCALL.  It
+contains the read-only struct usyscall for the process, currently its PID.
+Above it are TRAPFRAME, which is supervisor-only process trap state, and
+TRAMPOLINE, which contains the code used to enter and leave the kernel.
