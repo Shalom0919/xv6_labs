@@ -91,7 +91,9 @@ LD = $(TOOLPREFIX)ld
 OBJCOPY = $(TOOLPREFIX)objcopy
 OBJDUMP = $(TOOLPREFIX)objdump
 
-CFLAGS = -Wall -Werror -O -fno-omit-frame-pointer -ggdb
+CFLAGS = -Wall -Werror -Wno-infinite-recursion -Wno-incompatible-pointer-types -O -fno-omit-frame-pointer -ggdb
+CFLAGS += -march=rv64gc
+ASFLAGS = -march=rv64gc
 
 ifdef LAB
 LABUPPER = $(shell echo $(LAB) | tr a-z A-Z)
@@ -193,6 +195,12 @@ UPROGS=\
 	$U/_grind\
 	$U/_wc\
 	$U/_zombie\
+
+ifeq ($(LAB),syscall)
+UPROGS += \
+	$U/_trace\
+	$U/_sysinfotest
+endif
 
 
 
