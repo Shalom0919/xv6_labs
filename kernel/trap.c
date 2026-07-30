@@ -65,6 +65,11 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if(r_scause() == 15){
+    // A store page fault on a COW mapping needs a private writable page.
+    uint64 va = r_stval();
+    if(va >= p->sz || cowalloc(p->pagetable, va) < 0)
+      p->killed = 1;
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
@@ -217,4 +222,3 @@ devintr()
     return 0;
   }
 }
-
