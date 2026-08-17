@@ -86,7 +86,7 @@ LD = $(TOOLPREFIX)ld
 OBJCOPY = $(TOOLPREFIX)objcopy
 OBJDUMP = $(TOOLPREFIX)objdump
 
-CFLAGS = -Wall -Werror -O -fno-omit-frame-pointer -ggdb
+CFLAGS = -Wall -Werror -Wno-infinite-recursion -Wno-incompatible-pointer-types -O -fno-omit-frame-pointer -ggdb
 
 ifdef LAB
 LABUPPER = $(shell echo $(LAB) | tr a-z A-Z)
@@ -98,6 +98,8 @@ CFLAGS += -MD
 CFLAGS += -mcmodel=medany
 CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
 CFLAGS += -I.
+CFLAGS += -march=rv64gc
+ASFLAGS = -march=rv64gc
 CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
 
 ifeq ($(LAB),net)
@@ -295,7 +297,7 @@ QEMUOPTS += -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 
 ifeq ($(LAB),net)
 QEMUOPTS += -netdev user,id=net0,hostfwd=udp::$(FWDPORT)-:2000 -object filter-dump,id=net0,netdev=net0,file=packets.pcap
-QEMUOPTS += -device e1000,netdev=net0,bus=pcie.0
+QEMUOPTS += -device e1000,netdev=net0,bus=pcie.0,romfile=
 endif
 
 qemu: $K/kernel fs.img
