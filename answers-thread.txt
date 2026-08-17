@@ -1,0 +1,10 @@
+With two threads, two different keys can hash to the same bucket. Both
+threads can search the bucket and observe the same old head before either
+inserts. Each allocates a new entry whose next pointer is that old head.
+If thread 1 publishes its new head and thread 2 then publishes its own,
+thread 2 overwrites thread 1's table[i] update; thread 1's entry becomes
+unreachable, so the later get phase reports that key as missing.
+
+A mutex per bucket prevents this lost update while still allowing puts to
+different buckets to execute in parallel. The lock covers the search and
+the possible update or insertion, so each bucket operation is atomic.
