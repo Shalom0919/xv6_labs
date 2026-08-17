@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
 
 struct cpu cpus[NCPU];
 
@@ -119,6 +123,7 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  memset(p->vmas, 0, sizeof(p->vmas));
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -163,6 +168,7 @@ freeproc(struct proc *p)
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
+  memset(p->vmas, 0, sizeof(p->vmas));
   p->state = UNUSED;
 }
 
@@ -249,14 +255,219 @@ userinit(void)
 
 // Grow or shrink user memory by n bytes.
 // Return 0 on success, -1 on failure.
+static uint64
+vmalowest(struct proc *p)
+{
+  uint64 lowest = TRAPFRAME;
+
+  for(int i = 0; i < NVMA; i++)
+    if(p->vmas[i].valid && p->vmas[i].addr < lowest)
+      lowest = p->vmas[i].addr;
+  return lowest;
+}
+
+// Record a file mapping without allocating any physical pages.
+uint64
+vmamap(struct proc *p, uint64 length, int prot, int flags,
+       struct file *f, uint64 offset)
+{
+  struct vma *v = 0;
+  uint64 top, span, addr;
+
+  if(length == 0 || length > MAXVA || f == 0 || f->type != FD_INODE)
+    return -1;
+  if((prot & ~(PROT_READ | PROT_WRITE | PROT_EXEC)) != 0 ||
+     prot == PROT_NONE)
+    return -1;
+  if(flags != MAP_SHARED && flags != MAP_PRIVATE)
+    return -1;
+  if(f->readable == 0 ||
+     (flags == MAP_SHARED && (prot & PROT_WRITE) && f->writable == 0))
+    return -1;
+
+  for(int i = 0; i < NVMA; i++){
+    if(p->vmas[i].valid == 0){
+      v = &p->vmas[i];
+      break;
+    }
+  }
+  if(v == 0)
+    return -1;
+
+  span = PGROUNDUP(length);
+  if(span < length)
+    return -1;
+  top = vmalowest(p);
+  if(top < span)
+    return -1;
+  addr = top - span;
+  if(addr < PGROUNDUP(p->sz))
+    return -1;
+
+  v->valid = 1;
+  v->addr = addr;
+  v->length = span;
+  v->prot = prot;
+  v->flags = flags;
+  v->file = filedup(f);
+  v->offset = offset;
+  return addr;
+}
+
+// Populate one page of a VMA after a user page fault.
+int
+vmafault(struct proc *p, uint64 faultva, int cause)
+{
+  struct vma *v = 0;
+  uint64 va, fileoff;
+  char *mem;
+  int perm = PTE_U;
+  int n;
+
+  for(int i = 0; i < NVMA; i++){
+    if(p->vmas[i].valid && faultva >= p->vmas[i].addr &&
+       faultva < p->vmas[i].addr + p->vmas[i].length){
+      v = &p->vmas[i];
+      break;
+    }
+  }
+  if(v == 0)
+    return -1;
+  if((cause == 15 && (v->prot & PROT_WRITE) == 0) ||
+     (cause == 13 && (v->prot & PROT_READ) == 0) ||
+     (cause == 12 && (v->prot & PROT_EXEC) == 0))
+    return -1;
+
+  va = PGROUNDDOWN(faultva);
+  if(walkaddr(p->pagetable, va) != 0)
+    return -1;
+  if((mem = kalloc()) == 0)
+    return -1;
+  memset(mem, 0, PGSIZE);
+
+  fileoff = v->offset + (va - v->addr);
+  ilock(v->file->ip);
+  n = readi(v->file->ip, 0, (uint64)mem, fileoff, PGSIZE);
+  iunlock(v->file->ip);
+  if(n < 0){
+    kfree(mem);
+    return -1;
+  }
+
+  // RISC-V reserves write-only PTEs, so writable pages also need PTE_R.
+  if(v->prot & (PROT_READ | PROT_WRITE))
+    perm |= PTE_R;
+  if(v->prot & PROT_WRITE)
+    perm |= PTE_W;
+  if(v->prot & PROT_EXEC)
+    perm |= PTE_X;
+  if(mappages(p->pagetable, va, PGSIZE, (uint64)mem, perm) < 0){
+    kfree(mem);
+    return -1;
+  }
+  return 0;
+}
+
+static int
+vmawriteback(struct proc *p, struct vma *v, uint64 va, uint64 n)
+{
+  uint64 pa = walkaddr(p->pagetable, va);
+  int max = ((MAXOPBLOCKS-1-1-2) / 2) * BSIZE;
+  uint64 done = 0;
+
+  if(pa == 0 || v->flags != MAP_SHARED ||
+     (v->prot & PROT_WRITE) == 0)
+    return 0;
+
+  while(done < n){
+    int amount = n - done;
+    int written;
+    if(amount > max)
+      amount = max;
+    begin_op();
+    ilock(v->file->ip);
+    written = writei(v->file->ip, 0, pa + done,
+                     v->offset + (va - v->addr) + done, amount);
+    iunlock(v->file->ip);
+    end_op();
+    if(written != amount)
+      return -1;
+    done += written;
+  }
+  return 0;
+}
+
+// Unmap an entire VMA or a range at either end of one.
+int
+vmaunmap(struct proc *p, uint64 addr, uint64 length)
+{
+  struct vma *v = 0;
+  uint64 span, end;
+  int error = 0;
+
+  if(length == 0 || (addr % PGSIZE) != 0)
+    return -1;
+  span = PGROUNDUP(length);
+  if(span < length || addr + span < addr)
+    return -1;
+  end = addr + span;
+
+  for(int i = 0; i < NVMA; i++){
+    uint64 vend;
+    if(p->vmas[i].valid == 0)
+      continue;
+    vend = p->vmas[i].addr + p->vmas[i].length;
+    if(addr >= p->vmas[i].addr && end <= vend &&
+       (addr == p->vmas[i].addr || end == vend)){
+      v = &p->vmas[i];
+      break;
+    }
+  }
+  if(v == 0)
+    return -1;
+
+  for(uint64 va = addr; va < end; va += PGSIZE){
+    uint64 n = PGSIZE;
+    if(end - va < n)
+      n = end - va;
+    if(walkaddr(p->pagetable, va) != 0){
+      if(vmawriteback(p, v, va, n) < 0)
+        error = -1;
+      uvmunmap(p->pagetable, va, 1, 1);
+    }
+  }
+
+  if(addr == v->addr && span == v->length){
+    fileclose(v->file);
+    memset(v, 0, sizeof(*v));
+  } else if(addr == v->addr){
+    v->addr += span;
+    v->offset += span;
+    v->length -= span;
+  } else {
+    v->length -= span;
+  }
+  return error;
+}
+
+void
+vmaunmapall(struct proc *p)
+{
+  for(int i = 0; i < NVMA; i++)
+    if(p->vmas[i].valid)
+      vmaunmap(p, p->vmas[i].addr, p->vmas[i].length);
+}
+
 int
 growproc(int n)
 {
-  uint sz;
+  uint64 sz;
   struct proc *p = myproc();
 
   sz = p->sz;
   if(n > 0){
+    if(sz + n < sz || sz + n > vmalowest(p))
+      return -1;
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
@@ -288,6 +499,14 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
+
+  // Copy VMA metadata.  Mapped pages themselves stay lazy in the child.
+  for(i = 0; i < NVMA; i++){
+    if(p->vmas[i].valid){
+      np->vmas[i] = p->vmas[i];
+      np->vmas[i].file = filedup(p->vmas[i].file);
+    }
+  }
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
@@ -343,6 +562,9 @@ exit(int status)
 
   if(p == initproc)
     panic("init exiting");
+
+  // Write back shared mappings and release their file references.
+  vmaunmapall(p);
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){

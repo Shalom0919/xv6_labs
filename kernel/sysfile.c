@@ -53,6 +53,34 @@ fdalloc(struct file *f)
 }
 
 uint64
+sys_mmap(void)
+{
+  uint64 addr;
+  int length, prot, flags, offset;
+  struct file *f;
+
+  if(argaddr(0, &addr) < 0 || argint(1, &length) < 0 ||
+     argint(2, &prot) < 0 || argint(3, &flags) < 0 ||
+     argfd(4, 0, &f) < 0 || argint(5, &offset) < 0)
+    return -1;
+  if(addr != 0 || length <= 0 || offset != 0)
+    return -1;
+
+  return vmamap(myproc(), length, prot, flags, f, offset);
+}
+
+uint64
+sys_munmap(void)
+{
+  uint64 addr;
+  int length;
+
+  if(argaddr(0, &addr) < 0 || argint(1, &length) < 0 || length <= 0)
+    return -1;
+  return vmaunmap(myproc(), addr, length);
+}
+
+uint64
 sys_dup(void)
 {
   struct file *f;

@@ -86,7 +86,7 @@ LD = $(TOOLPREFIX)ld
 OBJCOPY = $(TOOLPREFIX)objcopy
 OBJDUMP = $(TOOLPREFIX)objdump
 
-CFLAGS = -Wall -Werror -O -fno-omit-frame-pointer -ggdb
+CFLAGS = -Wall -Werror -Wno-infinite-recursion -Wno-incompatible-pointer-types -O -fno-omit-frame-pointer -ggdb
 
 ifdef LAB
 LABUPPER = $(shell echo $(LAB) | tr a-z A-Z)
@@ -98,6 +98,8 @@ CFLAGS += -MD
 CFLAGS += -mcmodel=medany
 CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
 CFLAGS += -I.
+CFLAGS += -march=rv64gc
+ASFLAGS = -march=rv64gc
 CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
 
 ifeq ($(LAB),net)
@@ -245,6 +247,11 @@ endif
 ifeq ($(LAB),fs)
 UPROGS += \
 	$U/_bigfile
+endif
+
+ifeq ($(LAB),mmap)
+UPROGS += \
+	$U/_mmaptest
 endif
 
 

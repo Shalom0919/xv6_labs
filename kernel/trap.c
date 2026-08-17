@@ -65,6 +65,9 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if((r_scause() == 12 || r_scause() == 13 || r_scause() == 15) &&
+            vmafault(p, r_stval(), r_scause()) == 0){
+    // A file-backed VMA page was populated lazily.
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
@@ -217,4 +220,3 @@ devintr()
     return 0;
   }
 }
-
