@@ -16,6 +16,8 @@
 #include "file.h"
 #include "fcntl.h"
 
+static struct inode* create(char*, short, short, short);
+
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
 static int
@@ -165,6 +167,36 @@ bad:
   return -1;
 }
 
+// Create a symbolic link at path that stores target as its contents.
+uint64
+sys_symlink(void)
+{
+  char target[MAXPATH], path[MAXPATH];
+  struct inode *ip;
+  int n;
+
+  if(argstr(0, target, MAXPATH) < 0 ||
+     argstr(1, path, MAXPATH) < 0)
+    return -1;
+
+  begin_op();
+  if((ip = create(path, T_SYMLINK, 0, 0)) == 0){
+    end_op();
+    return -1;
+  }
+
+  n = strlen(target) + 1;
+  if(writei(ip, 0, (uint64)target, 0, n) != n){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  iunlockput(ip);
+  end_op();
+  return 0;
+}
+
 // Is the directory dp empty except for "." and ".." ?
 static int
 isdirempty(struct inode *dp)
@@ -286,7 +318,7 @@ create(char *path, short type, short major, short minor)
 uint64
 sys_open(void)
 {
-  char path[MAXPATH];
+  char path[MAXPATH], target[MAXPATH];
   int fd, omode;
   struct file *f;
   struct inode *ip;
@@ -309,6 +341,27 @@ sys_open(void)
       return -1;
     }
     ilock(ip);
+
+    // Follow symbolic links unless the caller explicitly asks for the
+    // link inode itself.  Limiting the depth also detects link cycles.
+    if((omode & O_NOFOLLOW) == 0){
+      for(int depth = 0; ip->type == T_SYMLINK; depth++){
+        if(depth >= 10 ||
+           (n = readi(ip, 0, (uint64)target, 0, MAXPATH)) <= 0){
+          iunlockput(ip);
+          end_op();
+          return -1;
+        }
+        target[MAXPATH-1] = 0;
+        iunlockput(ip);
+        if((ip = namei(target)) == 0){
+          end_op();
+          return -1;
+        }
+        ilock(ip);
+      }
+    }
+
     if(ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);
       end_op();
