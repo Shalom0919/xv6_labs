@@ -1,9 +1,7 @@
 # xv6-labs-2021 实验报告
 
-本分支仅托管合并后的实验报告，不包含实验源代码。
+本分支仅托管实验报告，实验源代码在main分支中。
 
-- 报告文件：[xv6_labs_2021_complete_report.pdf](./xv6_labs_2021_complete_report.pdf)
-- 总页数：86 页
 - 实验版本：MIT 6.S081 xv6-labs-2021
 
 ## 实验与官方评分
